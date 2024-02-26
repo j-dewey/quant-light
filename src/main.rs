@@ -5,6 +5,8 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
+mod light;
+
 async fn run(event_loop: EventLoop<()>, window: Window) {
     let mut size = window.inner_size();
     size.width = size.width.max(1);
@@ -44,9 +46,36 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
     });
 
+    let texture_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // This should match the filterable field of the
+                    // corresponding Texture entry above.
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("texture_bind_group_layout"),
+        });
+
+    let light_bind_group_layout = light::LightUniform::get_bind_group_layout(&device);
+
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[],
+        bind_group_layouts: &[&texture_bind_group_layout, &light_bind_group_layout],
         push_constant_ranges: &[],
     });
 
@@ -59,7 +88,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_main",
-            buffers: &[],
+            buffers: &[light::QuadVertex::get_desc()],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -76,6 +105,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         .get_default_config(&adapter, size.width, size.height)
         .unwrap();
     surface.configure(&device, &config);
+
+    let render_quad = light::QuadVertex::generate_render_buffer(&device);
+    let mouse_light = light::LightUniform {
+        position: [0.0, 0.0],
+        max_at: 1.0,
+    };
 
     let window = &window;
     event_loop
@@ -110,6 +145,9 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                             device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                 label: None,
                             });
+
+                        let light_bg =
+                            mouse_light.get_bind_group(&light_bind_group_layout, &device);
                         {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -127,7 +165,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     occlusion_query_set: None,
                                 });
                             rpass.set_pipeline(&render_pipeline);
-                            rpass.draw(0..3, 0..1);
+                            rpass.set_bind_group(0, bind_group, offsets);
                         }
 
                         queue.submit(Some(encoder.finish()));
