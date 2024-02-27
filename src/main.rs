@@ -62,8 +62,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    // This should match the filterable field of the
-                    // corresponding Texture entry above.
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -106,10 +104,73 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         .unwrap();
     surface.configure(&device, &config);
 
+    let img_bytes = include_bytes!("purple_gradient.png");
+    let diffuse_image = image::load_from_memory(img_bytes).unwrap();
+    let diffuse_rgba = diffuse_image.to_rgba8();
+    use image::GenericImageView;
+    let img_dimensions = diffuse_image.dimensions();
+    let texture_size = wgpu::Extent3d {
+        width: img_dimensions.0,
+        height: img_dimensions.1,
+        depth_or_array_layers: 1,
+    };
+    let light_texture = device.create_texture(&wgpu::TextureDescriptor {
+        size: texture_size,
+        mip_level_count: 1, // We'll talk about this a little later
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        label: Some("light_texture"),
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture: &light_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &diffuse_rgba,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * img_dimensions.0),
+            rows_per_image: Some(img_dimensions.1),
+        },
+        texture_size,
+    );
+    let texture_view = light_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+
+    let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &texture_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&texture_sampler),
+            },
+        ],
+        label: Some("diffuse_bind_group"),
+    });
+
     let render_quad = light::QuadVertex::generate_render_buffer(&device);
-    let mouse_light = light::LightUniform {
-        position: [0.0, 0.0],
-        max_at: 1.0,
+    let render_indices = light::QuadVertex::generate_index_buffer(&device);
+    let mut mouse_light = light::LightUniform {
+        x: 0.5,
+        y: 0.5,
+        max_at: 0.25,
     };
 
     let window = &window;
@@ -134,6 +195,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                         // On macos the window needs to be redrawn manually after resizing
                         window.request_redraw();
                     }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        let size = window.inner_size();
+                        mouse_light.x = position.x as f32 / size.width as f32;
+                        mouse_light.y = position.y as f32 / size.height as f32;
+                        window.request_redraw();
+                    }
                     WindowEvent::RedrawRequested => {
                         let frame = surface
                             .get_current_texture()
@@ -145,7 +212,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                             device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                 label: None,
                             });
-
                         let light_bg =
                             mouse_light.get_bind_group(&light_bind_group_layout, &device);
                         {
@@ -156,7 +222,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                         view: &view,
                                         resolve_target: None,
                                         ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                                            load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
                                             store: wgpu::StoreOp::Store,
                                         },
                                     })],
@@ -165,7 +231,14 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                                     occlusion_query_set: None,
                                 });
                             rpass.set_pipeline(&render_pipeline);
-                            rpass.set_bind_group(0, bind_group, offsets);
+                            rpass.set_bind_group(0, &texture_bind_group, &[]);
+                            rpass.set_bind_group(1, &light_bg, &[]);
+                            rpass.set_vertex_buffer(0, render_quad.slice(..));
+                            rpass.set_index_buffer(
+                                render_indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            rpass.draw_indexed(0..6, 0, 0..1);
                         }
 
                         queue.submit(Some(encoder.finish()));

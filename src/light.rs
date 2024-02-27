@@ -35,12 +35,20 @@ impl QuadVertex {
             usage: wgpu::BufferUsages::VERTEX,
         })
     }
+    pub fn generate_index_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&[0u32, 2u32, 1u32, 1u32, 2u32, 3u32]),
+            usage: wgpu::BufferUsages::INDEX,
+        })
+    }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LightUniform {
-    pub position: [f32; 2],
+    pub x: f32,
+    pub y: f32,
     pub max_at: f32,
 }
 
@@ -69,7 +77,7 @@ impl LightUniform {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&[self]),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::UNIFORM,
         });
 
         device.create_bind_group(&wgpu::BindGroupDescriptor {
