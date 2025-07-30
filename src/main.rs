@@ -253,8 +253,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 }
 
 fn main() {
-    let window = println!("Welcome");
-    println!("Hello, world!");
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     pollster::block_on(run(event_loop, window));
